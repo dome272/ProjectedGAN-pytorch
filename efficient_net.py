@@ -227,16 +227,35 @@ def build_efficientnet_lite(name, num_classes):
     return model
 
 
+def load_checkpoint(net, checkpoint):
+    from collections import OrderedDict
+
+    temp = OrderedDict()
+    if 'state_dict' in checkpoint:
+        checkpoint = dict(checkpoint['state_dict'])
+    for k in checkpoint:
+        k2 = 'module.'+k if not k.startswith('module.') else k
+        temp[k2] = checkpoint[k]
+
+    net.load_state_dict(temp, strict=True)
+
+
 if __name__ == '__main__':
     model_name = 'efficientnet_lite1'
     model = build_efficientnet_lite(model_name, 1000)
-    model.eval()
-    x = torch.randn(1, 3, 256, 256)
-    x, features = model(x)
-    print(features)
-    for f in features:
-        print(f.shape)
-        print(f.shape[1])
+    # model.eval()
+    # x = torch.randn(1, 3, 256, 256)
+    # x, features = model(x)
+    # print(features)
+    # for f in features:
+    #     print(f.shape)
+    #     print(f.shape[1])
+    use_gpu = False
+    if torch.cuda.is_available():
+        use_gpu = True
+    checkpoint = torch.load("efficientnet_lite1.pth")
+    model.load_state_dict(checkpoint["state_dict"], strict=True)
+    # load_checkpoint(model, checkpoint)
 
     # from utils.flops_counter import get_model_complexity_info
     #

@@ -18,3 +18,16 @@ def weights_init(m):
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
 
+
+def load_checkpoint(net, checkpoint):
+    from collections import OrderedDict
+
+    temp = OrderedDict()
+    if 'state_dict' in checkpoint:
+        checkpoint = dict(checkpoint['state_dict'])
+    for k in checkpoint:
+        k2 = 'module.'+k if not k.startswith('module.') else k
+        temp[k2] = checkpoint[k]
+
+    net.load_state_dict(temp, strict=True)
+

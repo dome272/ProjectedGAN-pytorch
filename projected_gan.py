@@ -1,9 +1,11 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.nn.utils import spectral_norm
-from utils import kaiming_init
+from torchvision import utils as vutils
+from utils import kaiming_init, load_checkpoint
 from efficient_net import build_efficientnet_lite
 from generator import Generator
 from differentiable_augmentation import DiffAugment
@@ -102,7 +104,12 @@ class ProjectedGAN:
         self.gen = Generator(im_size=256)
         self.gen_optim = Adam(self.gen.parameters(), lr=0.0002, betas=(0, 0.99))
 
-        self.efficient_net = build_efficientnet_lite("efficientnet_lite1", 1)
+        self.efficient_net = build_efficientnet_lite("efficientnet_lite1", 1000)
+        self.efficient_net = nn.DataParallel(self.efficient_net)
+        checkpoint = torch.load("efficientnet_lite1.pth")
+        load_checkpoint(self.efficient_net, checkpoint)
+        self.efficient_net.eval()
+
         feature_sizes = self.get_feature_channels()
         self.csms = nn.ModuleList([
             CSM(feature_sizes[3], feature_sizes[2]),
@@ -118,7 +125,7 @@ class ProjectedGAN:
            MultiScaleDiscriminator(feature_sizes[3], 4),
                                    ][::-1])
         self.latent_dim = 100
-        self.epochs = 1
+        self.epochs = 100
         self.hinge_loss = nn.HingeEmbeddingLoss()
 
         augmentations = 'color,translation,cutout'
@@ -148,16 +155,20 @@ class ProjectedGAN:
         for csm in self.csms:
             csm.to(device)
         self.efficient_net.to(device)
-        # dataloader = torch.randn(1, 1, 3, 256, 256)
         for epoch in range(self.epochs):
             logging.info(f"Starting epoch {epoch+1}")
             for i, (real_imgs, _) in enumerate(self.dataset):
                 real_imgs = real_imgs.to(device)
-                z = torch.Tensor(real_imgs.shape[0], self.latent_dim).to(device)
+                z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
+                while np.any(np.isnan(z.numpy())):
+                    logging.info("Recreating z because it has NaN values in it.")
+                    z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
+                z = z.to(device)
                 y_real = torch.ones(4, 4).to(device)
                 y_fake = torch.zeros(4, 4).to(device)
 
                 gen_imgs_disc = self.gen(z).detach()
+                # gen_imgs_disc = torch.randn(real_imgs.shape[0], 3, 256, 256).to(device)
                 if self.diff_aug:
                     gen_imgs_disc = self.DiffAug.forward(gen_imgs_disc)
                     real_imgs = self.DiffAug.forward(real_imgs)
@@ -177,12 +188,25 @@ class ProjectedGAN:
                     y_hat_fake = disc(feature_fake)  # Cx4x4
                     y_hat_real = y_hat_real.sum(1)  # sum along channels axis (is 1 anyways, however it still removes the unnecessary axis)
                     y_hat_fake = y_hat_fake.sum(1)
-                    disc_loss = self.hinge_loss(y_hat_real, y_real) + self.hinge_loss(y_hat_fake, y_fake)
+                    # disc_loss = self.hinge_loss(y_hat_real, y_real) + self.hinge_loss(y_hat_fake, y_fake)
+                    loss_real = torch.mean(F.relu(1. - y_hat_real))
+                    loss_fake = torch.mean(F.relu(1. + y_hat_fake))
+                    disc_loss = loss_real + loss_fake
+                    # disc_loss = F.mse_loss(y_hat_real, y_real) + F.mse_loss(y_hat_fake, y_fake)
                     disc_loss.backward(retain_graph=True)
                     disc.optim.step()
-                    disc_losses.append(disc_loss)
+                    disc_losses.append(disc_loss.cpu().detach().numpy())
 
+                z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
+                while np.any(np.isnan(z.numpy())):
+                    logging.info("Recreating z because it has NaN values in it.")
+                    z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
+                z = z.to(device)
                 gen_imgs_gen = self.gen(z)
+                # gen_imgs_gen = torch.randn(real_imgs.shape[0], 3, 256, 256).to(device)
+                if i % 10 == 0:
+                    with torch.no_grad():
+                        vutils.save_image(gen_imgs_gen.add(1).mul(0.5), "results" + f'/{epoch}_{i}.jpg', nrow=4)
 
                 if self.diff_aug:
                     gen_imgs_gen = self.DiffAug.forward(gen_imgs_gen)
@@ -197,11 +221,13 @@ class ProjectedGAN:
                 for feature_fake, disc in zip(features_fake, self.discs):
                     y_hat = disc(feature_fake)
                     y_hat = y_hat.sum(1)
-                    gen_loss += self.hinge_loss(y_hat, y_fake)
+                    # gen_loss += self.hinge_loss(y_hat, y_fake)
+                    gen_loss = -torch.mean(y_hat)
+                    # gen_loss += F.mse_loss(y_hat, y_fake)
                 gen_loss.backward()
                 self.gen_optim.step()
 
-                logging.info(f"Iteration {i}: Gen Loss = {gen_loss}, Disc Loss = {sum(disc_losses) / 4}.")
+                logging.info(f"Iteration {i}: Gen Loss = {gen_loss}, Disc Loss = {disc_losses}.")
 
     def get_feature_channels(self):
         sample = torch.randn(1, 3, self.width, self.height)
@@ -210,5 +236,5 @@ class ProjectedGAN:
 
 
 if __name__ == '__main__':
-    Projected_GAN = ProjectedGAN("data", 256, 256, batch_size=32)
+    Projected_GAN = ProjectedGAN("datasets/data", 256, 256, batch_size=16)
     Projected_GAN.train()
