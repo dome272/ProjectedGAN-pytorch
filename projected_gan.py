@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,6 +12,7 @@ from efficient_net import build_efficientnet_lite
 from generator import Generator
 from differentiable_augmentation import DiffAugment
 from dataset import load_data
+import argparse
 import logging
 logging.basicConfig(format="%(asctime)s - %(levelname)s: %(message)s", level=logging.INFO, datefmt="%I:%M:%S")
 
@@ -96,17 +99,15 @@ class CSM(nn.Module):
 
 
 class ProjectedGAN:
-    def __init__(self, dataset_path, width, height, diff_aug=True, batch_size=1):
-        assert width == height, "Width and height must be equal"
-        self.width = width
-        self.height = height
+    def __init__(self, args):
+        self.img_size = args.image_size
 
-        self.gen = Generator(im_size=256)
-        self.gen_optim = Adam(self.gen.parameters(), lr=0.0002, betas=(0, 0.99))
+        self.gen = Generator(im_size=args.image_size)
+        self.gen_optim = Adam(self.gen.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
 
         self.efficient_net = build_efficientnet_lite("efficientnet_lite1", 1000)
         self.efficient_net = nn.DataParallel(self.efficient_net)
-        checkpoint = torch.load("efficientnet_lite1.pth")
+        checkpoint = torch.load(args.checkpoint_efficient_net)
         load_checkpoint(self.efficient_net, checkpoint)
         self.efficient_net.eval()
 
@@ -123,16 +124,19 @@ class ProjectedGAN:
            MultiScaleDiscriminator(feature_sizes[1], 2),
            MultiScaleDiscriminator(feature_sizes[2], 3),
            MultiScaleDiscriminator(feature_sizes[3], 4),
-                                   ][::-1])
-        self.latent_dim = 100
-        self.epochs = 100
-        self.hinge_loss = nn.HingeEmbeddingLoss()
+        ][::-1])
+
+        self.latent_dim = args.latent_dim
+        self.epochs = args.epochs
 
         augmentations = 'color,translation,cutout'
         self.DiffAug = DiffAugment(augmentations)
-        self.diff_aug = diff_aug
+        self.diff_aug = args.diff_aug
 
-        self.dataset = load_data(dataset_path, batch_size)
+        self.dataset = load_data(args.dataset_path, args.batch_size)
+        self.log_every = args.log_every
+        self.ckpt_path = args.checkpoint_path
+        self.save_all = args.save_all
 
     def csm_forward(self, features):
         features = features[::-1]
@@ -159,16 +163,10 @@ class ProjectedGAN:
             logging.info(f"Starting epoch {epoch+1}")
             for i, (real_imgs, _) in enumerate(self.dataset):
                 real_imgs = real_imgs.to(device)
-                z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
-                while np.any(np.isnan(z.numpy())):
-                    logging.info("Recreating z because it has NaN values in it.")
-                    z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
+                z = torch.randn(real_imgs.shape[0], self.latent_dim)
                 z = z.to(device)
-                y_real = torch.ones(4, 4).to(device)
-                y_fake = torch.zeros(4, 4).to(device)
 
                 gen_imgs_disc = self.gen(z).detach()
-                # gen_imgs_disc = torch.randn(real_imgs.shape[0], 3, 256, 256).to(device)
                 if self.diff_aug:
                     gen_imgs_disc = self.DiffAug.forward(gen_imgs_disc)
                     real_imgs = self.DiffAug.forward(real_imgs)
@@ -181,6 +179,7 @@ class ProjectedGAN:
                 features_real = self.csm_forward(features_real)
                 features_fake = self.csm_forward(features_fake)
 
+                # Train Discriminators:
                 disc_losses = []
                 for feature_real, feature_fake, disc in zip(features_real, features_fake, self.discs):
                     disc.optim.zero_grad()
@@ -188,29 +187,26 @@ class ProjectedGAN:
                     y_hat_fake = disc(feature_fake)  # Cx4x4
                     y_hat_real = y_hat_real.sum(1)  # sum along channels axis (is 1 anyways, however it still removes the unnecessary axis)
                     y_hat_fake = y_hat_fake.sum(1)
-                    # disc_loss = self.hinge_loss(y_hat_real, y_real) + self.hinge_loss(y_hat_fake, y_fake)
                     loss_real = torch.mean(F.relu(1. - y_hat_real))
                     loss_fake = torch.mean(F.relu(1. + y_hat_fake))
                     disc_loss = loss_real + loss_fake
-                    # disc_loss = F.mse_loss(y_hat_real, y_real) + F.mse_loss(y_hat_fake, y_fake)
                     disc_loss.backward(retain_graph=True)
                     disc.optim.step()
                     disc_losses.append(disc_loss.cpu().detach().numpy())
 
-                z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
-                while np.any(np.isnan(z.numpy())):
-                    logging.info("Recreating z because it has NaN values in it.")
-                    z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
+                # Train Generator:
+                z = torch.randn(real_imgs.shape[0], self.latent_dim)
                 z = z.to(device)
+                # z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
+                # while np.any(np.isnan(z.numpy())):
+                #     logging.info("Recreating z because it has NaN values in it.")
+                #     z = torch.Tensor(np.random.randn(real_imgs.shape[0], self.latent_dim))
                 gen_imgs_gen = self.gen(z)
-                # gen_imgs_gen = torch.randn(real_imgs.shape[0], 3, 256, 256).to(device)
-                if i % 10 == 0:
-                    with torch.no_grad():
-                        vutils.save_image(gen_imgs_gen.add(1).mul(0.5), "results" + f'/{epoch}_{i}.jpg', nrow=4)
 
                 if self.diff_aug:
                     gen_imgs_gen = self.DiffAug.forward(gen_imgs_gen)
 
+                # get efficient net features
                 _, features_fake = self.efficient_net(gen_imgs_gen)
 
                 # feed efficient net features through CSM
@@ -221,20 +217,43 @@ class ProjectedGAN:
                 for feature_fake, disc in zip(features_fake, self.discs):
                     y_hat = disc(feature_fake)
                     y_hat = y_hat.sum(1)
-                    # gen_loss += self.hinge_loss(y_hat, y_fake)
                     gen_loss = -torch.mean(y_hat)
-                    # gen_loss += F.mse_loss(y_hat, y_fake)
                 gen_loss.backward()
                 self.gen_optim.step()
 
-                logging.info(f"Iteration {i}: Gen Loss = {gen_loss}, Disc Loss = {disc_losses}.")
+                if i % self.log_every == 0:
+                    path = os.path.join(self.ckpt_path, str(epoch))
+                    os.mkdir(path)
+                    with torch.no_grad():
+                        vutils.save_image(gen_imgs_gen.add(1).mul(0.5), os.path.join(path, f'/{epoch}_{i}.jpg'), nrow=4)
+                    logging.info(f"Iteration {i}: Gen Loss = {gen_loss}, Disc Loss = {disc_losses}.")
+                    torch.save(self.gen.state_dict(), os.path.join(path, "Generator"))
+                    if self.save_all:
+                        for j in range(len(self.discs)):
+                            torch.save(self.discs[j].state_dict(), os.path.join(path, f"Discriminator_{j}"))
+                            torch.save(self.csms[j].state_dict(), os.path.join(path, f"CSM_{j}"))
 
     def get_feature_channels(self):
-        sample = torch.randn(1, 3, self.width, self.height)
+        sample = torch.randn(1, 3, self.img_size, self.img_size)
         _, features = self.efficient_net(sample)
         return [f.shape[1] for f in features]
 
 
 if __name__ == '__main__':
-    Projected_GAN = ProjectedGAN("datasets/data", 256, 256, batch_size=16)
+    parser = argparse.ArgumentParser(description="ProjectedGAN")
+    parser.add_argument('--batch-size', type=int, default=32, help='input batch size for training (default: 32)')
+    parser.add_argument('--epochs', type=int, default=50, metavar='N', help='number of epochs to train (default: 50)')
+    parser.add_argument('--lr', type=float, default=0.0002, metavar='LR', help='learning rate (default: 0.0002)')
+    parser.add_argument('--beta1', type=float, default=0.0, metavar='lambda', help='Adam beta param (default: 0.0)')
+    parser.add_argument('--beta2', type=float, default=0.999, metavar='lambda', help='Adam beta param (default: 0.999)')
+    parser.add_argument('--latent-dim', type=int, default=100, help='Latent dimension for generator (default: 100)')
+    parser.add_argument('--diff-aug', type=bool, default=True, help='Apply differentiable augmentation to both discriminator and generator (default: True)')
+    parser.add_argument('--checkpoint-path', type=str, default="/checkpoints", metavar='Path', help='Path for checkpointing (default: /checkpoints)')
+    parser.add_argument('--save-all', type=bool, default=False, help='Saves all discriminator, all CSMs and generator if True, only the generator otherwise (default: False)')
+    parser.add_argument('--checkpoint-efficient-net', type=str, default="efficientnet_lite1.pth", metavar='Path', help='Path for EfficientNet checkpoint (default: efficientnet_lite1.pth)')
+    parser.add_argument('--log-every', type=int, default=100, help='How often model will be saved, generated images will be saved etc. (default: 100)')
+    parser.add_argument('--dataset-path', type=str, default='/data', metavar='Path', help='Path to data (default: /data)')
+    parser.add_argument('--image-size', type=int, default=256, help='Size of images in dataset (default: 256)')
+    args = parser.parse_args()
+    Projected_GAN = ProjectedGAN(args)
     Projected_GAN.train()
