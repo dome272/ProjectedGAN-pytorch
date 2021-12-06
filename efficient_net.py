@@ -1,3 +1,5 @@
+"""Code taken and slightly modified from https://github.com/RangiLyu/EfficientNet-Lite"""
+
 import math
 import torch
 from torch import nn
