@@ -47,7 +47,7 @@ usage: generator.py [-h] --weights-path Path --latent-dim N --n-images N --image
   --mode N             Wheter to generate images individually (0) ,in a grid (1), or both (2)
   --grid-size N        Size (N x N) of the images grid. default (8)
   --verbose Bool       Verbose. (default: True)
-  --out-dir Path     S  Path of the output folder for generated images                                                      
+  --out-dir Path       Path of the output folder for generated images                                                      
 ```
 
 ## Citation
