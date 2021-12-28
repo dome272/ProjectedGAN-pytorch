@@ -32,6 +32,24 @@ usage: projected_gan.py [-h] [--batch-size BATCH_SIZE] [--epochs N] [--lr LR] [-
   --image-size                    IMAGE_SIZE Size of images in dataset (default: 256)
 ```
 
+# Generating new data
+```
+usage: generator.py [-h] --weights-path Path --latent-dim N --n-images N --image-size N [--mode N] [--grid-size N]
+                    [--out-dir Path] [--verbose Bool] 
+
+```
+
+```
+  --weights-path Path  Path for Generator's weights
+  --latent-dim N       Latent dimension for generator (default: 100)
+  --n-images N         Number of Images to generate
+  --image-size N       Size of Images to generate (N x N)
+  --mode N             Wheter to generate images individually (0) ,in a grid (1), or both (2)
+  --grid-size N        Size (N x N) of the images grid. default (8)
+  --verbose Bool       Verbose. (default: True)
+  --out-dir Path     S  Path of the output folder for generated images                                                      
+```
+
 ## Citation
 ```bibtex
 @InProceedings{Sauer2021NEURIPS,

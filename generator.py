@@ -1,10 +1,17 @@
 """
 Generator architecture and code taken from "Towards Faster and Stabilized GAN Training for High-fidelity Few-shot Image Synthesis" (arxiv.org/abs/2101.04775) and github.com/odegeasslbc/FastGAN-pytorch, respectively.
 """
+import os
+import argparse
+from tqdm import tqdm
+
 import torch
+import torchvision
 import torch.nn as nn
+from torchvision.utils import save_image
 from torch.nn.utils import spectral_norm
 from utils import weights_init
+
 
 
 def conv2d(*args, **kwargs):
@@ -140,6 +147,56 @@ class Generator(nn.Module):
 
 
 if __name__ == '__main__':
-    gen = Generator(im_size=256)
-    noise = torch.Tensor(3, 100)
-    print(gen(noise))
+    parser = argparse.ArgumentParser(description='Projected GAN Generator')
+    parser.add_argument('--weights-path', type=str,metavar="Path", help='Path for Generator\'s weights',required=True )
+    parser.add_argument('--latent-dim', type=int,metavar="N", help='Latent dimension for generator (default: 100)',required=True )
+    parser.add_argument('--n-images', type=int,metavar="N", help='Number of Images to generate',required=True )
+    parser.add_argument('--image-size', type=int,metavar="N", help='Size of Images to generate (N x N)',required=True )
+    parser.add_argument('--mode', type=bool,metavar="N", default=2, help='Wheter to generate images individually (0) ,in a grid (1), or both (2)')
+    parser.add_argument('--grid-size', type=int,metavar="N", default=8, help='Size (N x N) of the images grid. default (8)')
+    parser.add_argument('--out-dir', type=str,metavar="Path", default="./generated-images", help='Path of the output folder for generated images')
+    parser.add_argument('--verbose', type=bool,metavar="Bool", default=True, help='Verbose. (default: True)')
+    args = parser.parse_args()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    print("Using device : "+ device)
+
+    # Loading state dict
+    gen = Generator(im_size=args.image_size)
+    gen.load_state_dict(torch.load(args.weights_path))
+    if args.verbose:
+        print("Successfully loaded generator's state dict at : " + args.weights_path)
+
+    # Creating the output dir
+    if not os.path.exists(args.out_dir):
+        if args.verbose:
+            print("Creating the output dir : ",args.out_dir)
+        os.mkdir(args.out_dir)
+
+    #Initializing list for grid
+    gen_imgs_list=[]
+    for i in tqdm(range(1,args.n_images + 1), position=0, leave=True):
+        
+        noise = torch.randn(args.latent_dim,1,1,device=device)
+        #Generating single image
+        gen_img = gen(noise.unsqueeze(0))
+        #Saving the indivudual image
+        if args.mode in [0,2]:
+            img_path = os.path.join(args.out_dir,f"img-{i}.jpg")
+            save_image(gen_img, img_path)
+        
+        # Saving grid of images (N x N)
+        if args.mode in [1,2]:
+            gen_imgs_list.append(gen_img.detach().cpu().squeeze(0))
+            if len(gen_imgs_list) == args.grid_size ** 2:
+                grid_img_path=os.path.join(args.out_dir,f"grid-imgs-{i - args.grid_size}-{i}.jpg")
+                save_image( gen_imgs_list, grid_img_path,nrow=args.grid_size)
+                gen_imgs_list = []
+
+    # If there are remaining images in the grid array
+    if len(gen_imgs_list) and args.mode in [1,2]:
+        save_image(gen_imgs_list ,os.path.join(args.out_dir,f"grid-imgs-{i - len(gen_imgs_list)}-{i}-remaining_batch.jpg"),nrow=args.grid_size)
+    print("Done.")
+
+
