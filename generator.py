@@ -190,7 +190,7 @@ if __name__ == '__main__':
         if args.mode in [1,2]:
             gen_imgs_list.append(gen_img.detach().cpu().squeeze(0))
             if len(gen_imgs_list) == args.grid_size ** 2:
-                grid_img_path=os.path.join(args.out_dir,f"grid-imgs-{i - args.grid_size}-{i}.jpg")
+                grid_img_path=os.path.join(args.out_dir,f"grid-imgs-{(i - args.grid_size ** 2 ) + 1}-{i}.jpg")
                 save_image( gen_imgs_list, grid_img_path,nrow=args.grid_size)
                 gen_imgs_list = []
 
