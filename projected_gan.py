@@ -155,6 +155,7 @@ class ProjectedGAN:
         self.dataset = load_data(args.dataset_path, args.batch_size)
         self.log_every = args.log_every
         self.ckpt_path = args.checkpoint_path
+        self.load_checkpoint = args.load_checkpoint
         self.save_all = args.save_all
 
     def csm_forward(self, features):
@@ -178,14 +179,25 @@ class ProjectedGAN:
         for csm in self.csms:
             csm.to(device)
         self.efficient_net.to(device)
-        for epoch in range(self.epochs):
-            logging.info(f"Starting epoch {epoch+1}")
+
+        ckpts_outputs_path = os.path.join(self.ckpt_path, "ckpts_outputs")
+        if not os.path.exists(ckpts_outputs_path):
+            os.mkdir(ckpts_outputs_path)
+
+        if self.load_checkpoint:
+            starting_epoch = int(os.path.basename(self.load_checkpoint)) + 1
+            logging.info(f"Resuming from epoch {starting_epoch}")
+        else:
+            starting_epoch = 0
+        for epoch in range(starting_epoch, self.epochs + starting_epoch):
+            logging.info(f"Starting epoch {epoch}")
             for i, (real_imgs, _) in enumerate(self.dataset):
                 real_imgs = real_imgs.to(device)
                 z = torch.randn(real_imgs.shape[0], self.latent_dim)
                 z = z.to(device)
 
                 gen_imgs_disc = self.gen(z).detach()
+                batch_gen_imgs = torch.clone(gen_imgs_disc)
                 if self.diff_aug:
                     gen_imgs_disc = self.DiffAug.forward(gen_imgs_disc)
                     real_imgs = self.DiffAug.forward(real_imgs)
@@ -242,9 +254,10 @@ class ProjectedGAN:
 
                 if i % self.log_every == 0:
                     path = os.path.join(self.ckpt_path, str(epoch))
-                    os.mkdir(path)
+                    if not os.path.exists(path):
+                        os.mkdir(path)
                     with torch.no_grad():
-                        vutils.save_image(gen_imgs_gen.add(1).mul(0.5), os.path.join(path, f'/{epoch}_{i}.jpg'), nrow=4)
+                        vutils.save_image(batch_gen_imgs.add(1).mul(0.5), os.path.join(ckpts_outputs_path, f'{epoch}_{i}.jpg'), nrow=4)
                     logging.info(f"Iteration {i}: Gen Loss = {gen_loss}, Disc Loss = {disc_losses}.")
                     torch.save(self.gen.state_dict(), os.path.join(path, "Generator.pth"))
                     if self.save_all:
@@ -267,7 +280,7 @@ if __name__ == '__main__':
     parser.add_argument('--beta2', type=float, default=0.999, metavar='lambda', help='Adam beta param (default: 0.999)')
     parser.add_argument('--latent-dim', type=int, default=100, help='Latent dimension for generator (default: 100)')
     parser.add_argument('--diff-aug', type=bool, default=True, help='Apply differentiable augmentation to both discriminator and generator (default: True)')
-    parser.add_argument('--checkpoint-path', type=str, default="/checkpoints", metavar='Path', help='Path for checkpointing (default: /checkpoints)')
+    parser.add_argument('--checkpoint-path', type=str, default="./checkpoints", metavar='Path', help='Path for checkpointing (default: /checkpoints)')
     parser.add_argument('--load-checkpoint', type=str, metavar='Path', help='Folder containing the models checkpoint saved using the --save-all flag to resume training from there')
     parser.add_argument('--save-all', type=bool, default=False, help='Saves all discriminator, all CSMs and generator if True, only the generator otherwise (default: False)')
     parser.add_argument('--checkpoint-efficient-net', type=str, default="efficientnet_lite1.pth", metavar='Path', help='Path for EfficientNet checkpoint (default: efficientnet_lite1.pth)')

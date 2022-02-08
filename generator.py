@@ -149,12 +149,12 @@ class Generator(nn.Module):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Projected GAN Generator')
     parser.add_argument('--weights-path', type=str,metavar="Path", help='Path for Generator\'s weights',required=True )
-    parser.add_argument('--latent-dim', type=int,metavar="N", help='Latent dimension for generator (default: 100)',required=True )
+    parser.add_argument('--latent-dim', type=int,metavar="N", help='Latent dimension for generator',required=True )
     parser.add_argument('--n-images', type=int,metavar="N", help='Number of Images to generate',required=True )
-    parser.add_argument('--image-size', type=int,metavar="N", help='Size of Images to generate (N x N)',required=True )
-    parser.add_argument('--mode', type=bool,metavar="N", default=2, help='Wheter to generate images individually (0) ,in a grid (1), or both (2)')
+    parser.add_argument('--image-size', type=int,metavar="N",default=256, help='Size of Images to generate (N x N) (default: 256)')
+    parser.add_argument('--mode', type=int,metavar="N", default=2, help='Wheter to generate images individually (0) ,in a grid (1), or both (2) (default: 2)')
     parser.add_argument('--grid-size', type=int,metavar="N", default=8, help='Size (N x N) of the images grid. default (8)')
-    parser.add_argument('--out-dir', type=str,metavar="Path", default="./generated-images", help='Path of the output folder for generated images')
+    parser.add_argument('--out-dir', type=str,metavar="Path", default="./generated-images", help='Path of the output folder for generated images (default: ./generated-images)')
     parser.add_argument('--verbose', type=bool,metavar="Bool", default=True, help='Verbose. (default: True)')
     args = parser.parse_args()
 
